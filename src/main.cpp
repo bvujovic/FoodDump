@@ -1,28 +1,51 @@
-// https://diyi0t.com/servo-motor-tutorial-for-arduino-and-esp8266/
+#include <Arduino.h>
 
-#include <Servo.h>
+#include <WiFiServerBasics.h>
+ESP8266WebServer server(80);
 
-Servo myservo; //initialize a servo object
-int angle = 0;
+const uint pinLed = LED_BUILTIN;
+const uint pinSolenoid = D1;
+const uint MAX_SOLENOID_ON = 2000;
+
+// test json
+void handleTest()
+{
+    //T Serial.println("/test");
+    server.send(200, "application/json", "{ 'app': 'FoodDump' }");
+}
+
+// Povlacenje poluge solenoida ms milisekundi. Primer: /pull?ms=100
+void handlePull()
+{
+    uint ms = server.arg("ms").toInt();
+    if (ms > 0 && ms < MAX_SOLENOID_ON)
+    {
+        Serial.println("pali");
+        digitalWrite(pinSolenoid, true);
+        delay(ms);
+        digitalWrite(pinSolenoid, false);
+        Serial.println("gasi\n");
+    }
+    SendEmptyText(server);
+}
 
 void setup()
 {
-  myservo.attach(D3); // connect the servo at pin9
+    Serial.begin(115200);
+    pinMode(pinSolenoid, OUTPUT);
+    digitalWrite(pinSolenoid, false);
+    pinMode(pinLed, OUTPUT);
+    digitalWrite(pinLed, false); // LED upaljen
+    ConnectToWiFi();
+    SetupIPAddress(60);
+    server.on("/pull", handlePull);
+    server.on("/test", handleTest);
+    server.begin();
+    digitalWrite(pinLed, true); // LED ugasen
 }
 
 void loop()
-{ // move from 0 to 180 degrees with a positive angle of 1
-  for (angle = 0; angle < 180; angle += 1)
-  {
-    myservo.write(angle);
-    delay(15);
-  }
-  delay(1000); // move from 180 to 0 degrees with a negative angle of 5
-  for (angle = 180; angle >= 1; angle -= 1)
-  {
-    myservo.write(angle);
-    delay(5);
-  }
-
-  delay(1000);
+{
+    server.handleClient();
+    delay(10);
 }
