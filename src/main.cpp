@@ -11,88 +11,83 @@ void callback(char *topic, byte *data, uint length);
 #define TEST true
 #define FEED_SHORT_DUMP "food-dump-short"
 #define FEED_LONG_DUMP "food-dump-long"
-#define FEED_ONOFF_REQ "food-dump-onoff-req"
-#define FEED_ONOFF_RESP "food-dump-onoff-resp"
 const int pinSolenoid = D1;
-const int pinLed = LED_BUILTIN;
-const ulong ONE_SEC = 1000000UL;       // Broj mikrosekundi u 1 sec.
-const uint SLEEP = TEST ? 20 : 5 * 60; // Trajanje (u sec) spavanja aparata.
-const uint AWAKE_SHORT = 10;           // Trajanje (u sec) budnosti aparata za ispitivanje da li da ostane budan.
-const uint AWAKE_LONG = 3 * 60;        // Trajanje (u sec) budnosti aparata dok ceka neku pull komandu.
-bool stayAwake = false;                //
-ulong msLastAct;                       // Vreme (u ms) poslednje akcije: start, short/long pull.
+const uint RECONNECT = 5 * 60;                       // Trajanje (u sec) cekanja na ponovni rekonekt na MQTT server.
+const uint PREPARE_TO_DUMP = (TEST ? 2 : 10) * 1000; // Trajanje (u ms) cekanja da se korisnik spremi za posmatranje sipanja hrane.
+const int SHORT_PULL = 50;                          // Kratko aktiviranje solenoida (ispustanje hrane).
+const int LONG_PULL = 250;                          // Dugo aktiviranje solenoida (ispustanje hrane).
+const int MAX_SOLENOID_ON = 2000;                    // Maksimalno trajanje (u ms) aktiviranog/povucenog solenoida.
 
-void sleep()
+// Moguce vrednosti za dugmice u AIO FoodDump dashboard-u.
+enum ButtonStatus
 {
-    if (mqtt.connected())
-    {
-        mqtt.publish(AIO_USER AIO_FEEDS FEED_ONOFF_RESP, "0");
-        delay(100);
-    }
-    ESP.deepSleep(SLEEP * ONE_SEC, RF_DEFAULT);
-}
+    BTN_RELEASE = '0',
+    BTN_SHORT = '1',
+    BTN_LONG = '2'
+};
+
+void statusLed(bool on) { digitalWrite(LED_BUILTIN, !on); }
 
 void setup()
 {
     Serial.begin(115200);
     delay(100);
     pinMode(pinSolenoid, OUTPUT);
-    pinMode(pinLed, OUTPUT);
-    digitalWrite(pinLed, false);
-
+    pinMode(LED_BUILTIN, OUTPUT);
+    statusLed(true);
     ConnectToWiFi();
     Serial.print("\nWiFi connected, IP address: ");
     Serial.println(WiFi.localIP());
     mqtt.setServer(AIO_SERVER, AIO_SERVERPORT);
     mqtt.setCallback(callback);
 
-    Serial.println("Attempting MQTT connection...");
+    Serial.println("MQTT connecting...");
     if (mqtt.connect("", AIO_USER, AIO_KEY))
     {
         Serial.println("Connected");
-        mqtt.subscribe(AIO_USER AIO_FEEDS FEED_ONOFF_REQ, 0);
+        mqtt.subscribe(AIO_USER AIO_FEEDS FEED_SHORT_DUMP, 0);
+        mqtt.subscribe(AIO_USER AIO_FEEDS FEED_LONG_DUMP, 0);
+        statusLed(false);
     }
     else
     {
-        Serial.print("failed, rc=");
+        Serial.print("Failed. MQTT state: ");
         Serial.print(mqtt.state());
-        for (uint i = 0; i < 5; i++)
+        for (uint i = 0; i < RECONNECT; i++)
         {
-            digitalWrite(pinLed, i % 2);
+            statusLed(i % 2);
             delay(1000);
         }
-        sleep();
+        ESP.reset();
     }
-    msLastAct = millis();
 }
 
 void loop()
 {
-    if (stayAwake && millis() - msLastAct > AWAKE_LONG * 1000)
-        sleep();
-    if (!stayAwake && millis() - msLastAct > AWAKE_SHORT * 1000)
-        sleep();
-
     mqtt.loop();
-
-    delay(200);
+    delay(100);
 }
 
 void callback(char *topic, byte *data, uint length)
 {
     Serial.println(topic);
-    //B if(strends(topic, FEED_ONOFF_REQ))
-    size_t tlen = strlen(topic);
-    if (topic[tlen - 1] == 'q') // ...onoff-req
+    int ms = -1; // trajanje (u ms) povlacenja poluge solenoida
+    if (data[0] == BTN_SHORT)
+        ms = SHORT_PULL;
+    if (data[0] == BTN_LONG)
+        ms = LONG_PULL;
+    if (ms > 0 && ms <= MAX_SOLENOID_ON)
     {
-        stayAwake = length >= 2 && data[1] == 'N'; // stayAwake je true ako je data -> "ON"
-        msLastAct = millis();
-        mqtt.publish(AIO_USER AIO_FEEDS FEED_ONOFF_RESP, stayAwake ? "1" : "0");
-        delay(100);
-
-        //T
-        // for (uint i = 0; i < length; i++)
-        //     Serial.print((char)data[i]);
-        // Serial.println();
+        // cekanje da se korisnik pripremi za gledanje prosipanja hrane
+        statusLed(true);
+        delay(PREPARE_TO_DUMP);
+        statusLed(false);
+        delay(1000);
+        // prosipanje hrane omalenom kunikulusu
+        statusLed(true);
+        digitalWrite(pinSolenoid, true);
+        delay(ms);
+        digitalWrite(pinSolenoid, false);
+        statusLed(false);
     }
 }
